@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' https://*.supabase.co wss://*.supabase.co; base-uri 'none'; form-action 'none'">
+<title>لوحة الإدارة</title>
+<style>
+:root{--ink:#1b2430;--muted:#5d6b7a;--line:#d9dee4;--bg:#f2f4f6;--card:#fff;--accent:#0b5d57;--accent-ink:#fff;--danger:#b3261e}
+*{box-sizing:border-box}
+body{margin:0;min-height:100vh;display:grid;place-items:center;padding:1.25rem;background:var(--bg);color:var(--ink);font-family:"Segoe UI",Tahoma,system-ui,sans-serif;line-height:1.7}
+main{width:100%;max-width:26rem;background:var(--card);border:1px solid var(--line);border-radius:10px;padding:2rem}
+h1{margin:0 0 .5rem;font-size:1.35rem}
+p{margin:0 0 1rem;color:var(--muted)}
+label{display:block;margin:1rem 0 .25rem;font-weight:600;font-size:.95rem}
+input{width:100%;padding:.7rem .8rem;border:1px solid var(--line);border-radius:6px;font:inherit;background:#fff;color:var(--ink)}
+input:focus-visible,button:focus-visible{outline:3px solid #7fb8b2;outline-offset:1px}
+input.code{text-align:center;letter-spacing:.5em;font-size:1.4rem;direction:ltr}
+button{width:100%;margin-top:1.25rem;padding:.75rem;border:0;border-radius:6px;background:var(--accent);color:var(--accent-ink);font:inherit;font-weight:600;cursor:pointer}
+button:disabled{opacity:.6;cursor:wait}
+button.ghost{background:transparent;color:var(--accent);border:1px solid var(--line)}
+.err{min-height:1.5rem;margin:.75rem 0 0;color:var(--danger);font-size:.92rem}
+.qr{display:block;margin:1rem auto;width:12rem;height:12rem;border:1px solid var(--line);border-radius:6px;padding:.4rem;background:#fff}
+.secret{display:block;direction:ltr;text-align:center;word-break:break-all;background:var(--bg);border-radius:6px;padding:.5rem;font-family:ui-monospace,Consolas,monospace;font-size:.85rem;user-select:all}
+dl{margin:1rem 0 0;display:grid;grid-template-columns:auto 1fr;gap:.35rem 1rem}
+dt{color:var(--muted)}dd{margin:0}
+[hidden]{display:none!important}
+</style>
+</head>
+<body>
+<main>
+
+<section id="loading"><p>جارٍ التحميل…</p></section>
+
+<section id="login" hidden>
+  <h1>تسجيل دخول الأدمن</h1>
+  <p>ادخل بحساب الأدمن. سيُطلب منك بعدها رمز التحقق.</p>
+  <form id="loginForm" novalidate>
+    <label for="email">البريد الإلكتروني</label>
+    <input id="email" type="email" autocomplete="username" required dir="ltr">
+    <label for="password">كلمة المرور</label>
+    <input id="password" type="password" autocomplete="current-password" required dir="ltr">
+    <button type="submit">تسجيل الدخول</button>
+  </form>
+  <p class="err" id="loginErr" role="alert"></p>
+</section>
+
+<section id="enroll" hidden>
+  <h1>تفعيل التحقق بخطوتين</h1>
+  <p>افتح تطبيق Google Authenticator أو Authy، وامسح الرمز التالي. ثم اكتب الرمز المكوّن من 6 أرقام الذي يظهر في التطبيق.</p>
+  <img id="qr" class="qr" alt="رمز QR لتفعيل التحقق بخطوتين">
+  <p>إن تعذّر المسح، أدخل هذا المفتاح يدوياً في التطبيق:</p>
+  <code id="secret" class="secret"></code>
+  <form id="enrollForm" novalidate>
+    <label for="enrollCode">رمز التحقق</label>
+    <input id="enrollCode" class="code" inputmode="numeric" autocomplete="one-time-code" maxlength="6" pattern="[0-9]{6}" required>
+    <button type="submit">تفعيل ومتابعة</button>
+  </form>
+  <p class="err" id="enrollErr" role="alert"></p>
+  <button type="button" class="ghost" data-logout>إلغاء وتسجيل الخروج</button>
+</section>
+
+<section id="verify" hidden>
+  <h1>رمز التحقق</h1>
+  <p>اكتب الرمز المكوّن من 6 أرقام من تطبيق المصادقة.</p>
+  <form id="verifyForm" novalidate>
+    <label for="verifyCode">رمز التحقق</label>
+    <input id="verifyCode" class="code" inputmode="numeric" autocomplete="one-time-code" maxlength="6" pattern="[0-9]{6}" required>
+    <button type="submit">تأكيد</button>
+  </form>
+  <p class="err" id="verifyErr" role="alert"></p>
+  <button type="button" class="ghost" data-logout>تسجيل الخروج</button>
+</section>
+
+<section id="dash" hidden>
+  <h1>لوحة الإدارة</h1>
+  <p>تم الدخول بنجاح. هذه الصفحة سنبني عليها الإحصائيات وإدارة الباقات والمشتركين في الخطوات القادمة.</p>
+  <dl>
+    <dt>الاسم</dt><dd id="dName"></dd>
+    <dt>البريد</dt><dd id="dEmail" dir="ltr"></dd>
+    <dt>الدور</dt><dd id="dRole"></dd>
+  </dl>
+  <button type="button" class="ghost" data-logout>تسجيل الخروج</button>
+</section>
+
+</main>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js"></script>
+<script src="config.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
