@@ -9,7 +9,12 @@
   const sb = supabase.createClient(CONFIG.SUPABASE_URL, CONFIG.SUPABASE_KEY);
   const $ = (id) => document.getElementById(id);
   const VIEWS = ["loading", "login", "enroll", "verify", "dash"];
-  const show = (name) => VIEWS.forEach((v) => ($(v).hidden = v !== name));
+  const show = (name) => {
+    VIEWS.forEach((v) => ($(v).hidden = v !== name));
+    $("main").hidden = name === "dash";
+    document.body.classList.toggle("in", name === "dash");
+    if (name !== "dash") $("page").replaceChildren();
+  };
   const say = (id, text) => { $(id).textContent = text || ""; };
   const busy = (form, on) => form.querySelectorAll("button").forEach((b) => (b.disabled = on));
 
@@ -69,6 +74,7 @@
     $("dEmail").textContent = session.user.email;
     $("dRole").textContent = ROLES[data.role] || data.role;
     show("dash");
+    Admin.start(sb, data.role);
   }
 
   async function submitCode(form, factorId, errId) {
