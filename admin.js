@@ -49,19 +49,20 @@ window.Admin = (() => {
   function modal(title, fields, init, save) {
     const inputs = {}, err = h("p", { class: "err", role: "alert" });
     const body = fields.map((f) => {
+      if (f.t === "node") { inputs[f.k] = f; return f.node; }
       const v = init[f.k] ?? "";
       let el;
       if (f.t === "area") el = h("textarea", { rows: f.rows || 3, dir: f.dir }, v);
       else if (f.t === "select") el = h("select", { disabled: f.lock }, f.opts.map(([o, l]) => h("option", { value: o, selected: o === v }, l)));
       else if (f.t === "check") el = h("input", { type: "checkbox", checked: !!v });
-      else el = h("input", { type: f.t || "text", value: v, step: f.t === "number" ? "any" : null, dir: f.dir, maxlength: f.max });
+      else el = h("input", { type: f.t || "text", value: v, step: f.t === "number" ? "any" : null, dir: f.dir, maxlength: f.max, disabled: f.lock });
       inputs[f.k] = el;
       return h("label", { class: f.t === "check" ? "chk" : "" }, f.l, el, f.hint && h("small", {}, f.hint));
     });
     const dlg = h("dialog", { class: "modal" }, h("h1", {}, title), body, err);
     const ok = btn("حفظ", async () => {
       const vals = {};
-      fields.forEach((f) => { const e = inputs[f.k]; vals[f.k] = f.t === "check" ? e.checked : e.value.trim(); });
+      fields.forEach((f) => { const e = inputs[f.k]; vals[f.k] = f.t === "node" ? f.get() : f.t === "check" ? e.checked : e.value.trim(); });
       ok.disabled = true; err.textContent = "";
       const msg = await save(vals);
       ok.disabled = false;
@@ -74,7 +75,7 @@ window.Admin = (() => {
 
   async function setActive(table, row, on) {
     const warn = !on && table === "sites" ? "\nسيختفي الموقع وباقاته عن الزوار." : "";
-    if (!confirm((on ? "تفعيل" : "إيقاف") + " «" + row.name + "»؟" + warn)) return;
+    if (!confirm((on ? "تفعيل" : "إيقاف") + " «" + (row.name || row.label) + "»؟" + warn)) return;
     const { data, error } = await sb.from(table).update({ is_active: on }).eq("id", row.id).select("id");
     if (error || !data.length) return toast(error ? dbErr(error) : "لم يتم التنفيذ. تحقق من صلاحياتك.", true);
     toast("تم التحديث"); nav();
@@ -155,26 +156,60 @@ window.Admin = (() => {
   }
 
   // ---------- Plans ----------
-  function planForm(p, sites, allPerms, siteId) {
-    const init = { ...p, site_id: p.site_id || siteId, features: (p.features || []).join("\n"),
-      permissions: (p.permissions || []).join("\n"), currency: p.currency || "DZD",
+  const PERIODS = [["subscription", "مدة الاشتراك"], ["month", "شهرياً"], ["day", "يومياً"], ["never", "دائم"]];
+  function matrix(feats, rows) {
+    const by = Object.fromEntries(rows.map((r) => [r.feature_id, r])), st = {};
+    const list = feats.map((f) => {
+      const r = by[f.id];
+      const on = h("input", { type: "checkbox", checked: !!r });
+      const lim = h("input", { type: "number", min: "0", placeholder: "غير محدود", value: r && r.limit_value });
+      const per = h("select", {}, PERIODS.map(([v, l]) => h("option", { value: v, selected: v === (r ? r.reset_period : "subscription") }, l)));
+      st[f.id] = { f, on, lim, per };
+      return h("div", { class: "mrow" }, h("label", { class: "chk" }, on, f.label),
+        f.kind === "limit" && h("div", { class: "mlim" }, lim, h("span", {}, f.unit || ""), per));
+    });
+    const node = h("div", { class: "matrix" }, h("h2", {}, "ميزات الباقة"),
+      feats.length ? list : h("p", { class: "muted" }, "لا توجد ميزات نشطة لهذا الموقع. استوردها من صفحة الميزات."));
+    const get = () => Object.values(st).filter((x) => x.on.checked).map((x) => ({
+      feature_id: x.f.id, reset_period: x.per.value,
+      limit_value: x.f.kind === "limit" && x.lim.value !== "" ? Number(x.lim.value) : null }));
+    return { node, get };
+  }
+  async function savePF(planId, siteId, rows, listed) {
+    const keep = rows.map((r) => r.feature_id), drop = listed.filter((i) => !keep.includes(i));
+    if (drop.length) {
+      const { error } = await sb.from("plan_features").delete().eq("plan_id", planId).in("feature_id", drop);
+      if (error) return error;
+    }
+    if (!rows.length) return null;
+    const { error } = await sb.from("plan_features").upsert(
+      rows.map((r) => ({ ...r, plan_id: planId, site_id: siteId })), { onConflict: "plan_id,feature_id" });
+    return error;
+  }
+  async function planForm(p, sites, siteId) {
+    const sid = p.site_id || siteId;
+    const [fe, pf] = await Promise.all([
+      sb.from("features").select("id,label,kind,unit").eq("site_id", sid).eq("is_active", true).order("sort_order"),
+      p.id ? sb.from("plan_features").select("feature_id,limit_value,reset_period").eq("plan_id", p.id) : { data: [] }]);
+    if (fe.error || pf.error) return toast(dbErr(fe.error || pf.error), true);
+    const mx = matrix(fe.data, pf.data);
+    const init = { ...p, site_id: sid, currency: p.currency || "DZD",
       duration_value: p.duration_value ?? 1, duration_unit: p.duration_unit || "month",
       discount_type: p.discount_type || "none", discount_value: p.discount_value ?? 0,
       sort_order: p.sort_order ?? 0, is_active: p.is_active ?? true };
     modal(p.id ? "تعديل الباقة" : "باقة جديدة", [
-      { k: "site_id", l: "الموقع", t: "select", opts: sites.map((s) => [s.id, s.name]), lock: !!p.id },
+      { k: "site_id", l: "الموقع", t: "select", opts: sites.map((s) => [s.id, s.name]), lock: true },
       { k: "name", l: "اسم الباقة", max: 120 },
       { k: "description", l: "الوصف", t: "area", rows: 2 },
       { k: "price", l: "السعر", t: "number" },
       { k: "currency", l: "العملة", dir: "ltr", max: 3 },
       { k: "duration_value", l: "مدة الاشتراك", t: "number" },
       { k: "duration_unit", l: "وحدة المدة", t: "select", opts: Object.entries(UNIT) },
-      { k: "features", l: "المزايا (للعرض)", t: "area", rows: 4, hint: "كل ميزة في سطر" },
-      { k: "permissions", l: "الصلاحيات", t: "area", dir: "ltr", hint: "كل صلاحية في سطر، حروف إنجليزية صغيرة و_ مثل export" + (allPerms.length ? " — مستخدمة سابقاً: " + allPerms.join(", ") : "") },
       { k: "discount_type", l: "نوع التخفيض", t: "select", opts: [["none", "لا يوجد"], ["percent", "نسبة مئوية"], ["fixed", "مبلغ ثابت"]] },
       { k: "discount_value", l: "قيمة التخفيض", t: "number" },
       { k: "sort_order", l: "ترتيب الظهور (الأصغر أولاً)", t: "number" },
-      { k: "is_active", l: "الباقة نشطة", t: "check" }
+      { k: "is_active", l: "الباقة نشطة", t: "check" },
+      { k: "_mx", t: "node", node: mx.node, get: mx.get }
     ], init, async (v) => {
       const price = Number(v.price), dur = Number(v.duration_value), so = Number(v.sort_order || 0), cur = v.currency.toUpperCase();
       let disc = Number(v.discount_value || 0);
@@ -185,40 +220,118 @@ window.Admin = (() => {
       if (!Number.isInteger(so)) return "الترتيب عدد صحيح.";
       if (v.discount_type === "none") disc = 0;
       else if (!(disc > 0) || (v.discount_type === "percent" && disc > 100) || (v.discount_type === "fixed" && disc > price)) return "قيمة التخفيض غير صالحة (النسبة حتى 100، والمبلغ الثابت لا يتجاوز السعر).";
-      const perms = [...new Set(v.permissions.split(/[\n,]+/).map((x) => x.trim()).filter(Boolean))];
-      if (perms.some((x) => !RE.perm.test(x))) return "الصلاحيات: حروف إنجليزية صغيرة وأرقام و_ فقط، وتبدأ بحرف.";
+      if (v._mx.some((r) => r.limit_value !== null && (!Number.isInteger(r.limit_value) || r.limit_value < 0))) return "حد الميزة عدد صحيح موجب، أو اتركه فارغاً (غير محدود).";
       const row = { name: v.name, description: v.description || null, price, currency: cur, duration_value: dur,
-        duration_unit: v.duration_unit, features: v.features.split(/\r?\n/).map((x) => x.trim()).filter(Boolean),
-        permissions: perms, discount_type: v.discount_type, discount_value: disc, sort_order: so, is_active: v.is_active };
-      const q = p.id ? sb.from("plans").update(row).eq("id", p.id) : sb.from("plans").insert({ ...row, site_id: v.site_id });
+        duration_unit: v.duration_unit, discount_type: v.discount_type, discount_value: disc, sort_order: so, is_active: v.is_active };
+      const q = p.id ? sb.from("plans").update(row).eq("id", p.id) : sb.from("plans").insert({ ...row, site_id: sid });
+      const { data, error } = await q.select("id");
+      if (error) return dbErr(error);
+      if (!data.length) return "لم يتم الحفظ. تحقق من صلاحياتك.";
+      const e2 = await savePF(p.id || data[0].id, sid, v._mx, fe.data.map((f) => f.id));
+      if (e2) return "حُفظت الباقة لكن تعذّر حفظ ميزاتها: " + dbErr(e2);
+      toast("تم الحفظ"); nav(); return null;
+    });
+  }
+  async function pagePlans(el) {
+    const [a, b, c] = await Promise.all([
+      sb.from("sites").select("id,name").order("name"),
+      sb.from("plans").select("*").order("sort_order"),
+      sb.from("plan_features").select("plan_id")]);
+    if (a.error || b.error || c.error) return el.append(h("p", { class: "err" }, dbErr(a.error || b.error || c.error)));
+    const sites = a.data, plans = b.data, cnt = {};
+    c.data.forEach((x) => (cnt[x.plan_id] = (cnt[x.plan_id] || 0) + 1));
+    el.append(head("الباقات"));
+    if (!sites.length) return el.append(h("div", { class: "card empty" }, tile("globe"), h("p", {}, "أضف موقعاً أولاً لتتمكن من إنشاء الباقات."), h("a", { class: "btn pri", href: "#/sites" }, "إلى المواقع")));
+    const cols = ["الباقة", "السعر", "بعد التخفيض", "المدة", "الميزات", "الحالة"].concat(canEdit ? ["إجراءات"] : []);
+    for (const s of sites) {
+      const mine = plans.filter((p) => p.site_id === s.id);
+      el.append(h("div", { class: "head" }, h("h2", {}, s.name),
+        canEdit && btn("باقة جديدة", () => planForm({}, sites, s.id), "pri", "plus")),
+        tbl(cols, mine.map((p) => [p.name, num(p.price) + " " + p.currency,
+          p.discount_type === "none" ? "-" : num(p.final_price) + " " + p.currency,
+          p.duration_value + " " + UNIT[p.duration_unit], String(cnt[p.id] || 0), tag(p.is_active)]
+          .concat(canEdit ? [actions("plans", p, () => planForm(p, sites, s.id))] : [])), canEdit && (() => planForm({}, sites, s.id)), "باقة جديدة"));
+    }
+  }
+
+
+  // ---------- Features ----------
+  let curSite = "";
+  const FREE = { locked: "مقفلة", open: "مفتوحة" };
+  function featureForm(f, siteId) {
+    const init = { ...f, kind: f.kind || "toggle", free_access: f.free_access || "locked", sort_order: f.sort_order ?? 0, is_active: f.is_active ?? true };
+    modal(f.id ? "تعديل الميزة" : "ميزة جديدة", [
+      { k: "key", l: "المفتاح", dir: "ltr", lock: !!f.id, hint: "حروف إنجليزية صغيرة وأرقام و_ مثل export_pdf. لا يتغير بعد الإنشاء." },
+      { k: "label", l: "اسم الميزة", max: 160 },
+      { k: "description", l: "الوصف", t: "area", rows: 2 },
+      { k: "group_name", l: "المجموعة" },
+      { k: "kind", l: "النوع", t: "select", opts: [["toggle", "تشغيل / إيقاف"], ["limit", "حد عددي"]] },
+      { k: "unit", l: "وحدة الحد", hint: "للنوع العددي فقط، مثل document أو file" },
+      { k: "free_access", l: "بدون اشتراك", t: "select", opts: [["locked", "مقفلة"], ["open", "مفتوحة"], ["limited", "مفتوحة بحد (للعددي)"]] },
+      { k: "free_limit", l: "الحد المجاني", t: "number" },
+      { k: "sort_order", l: "ترتيب الظهور", t: "number" },
+      { k: "is_active", l: "الميزة نشطة", t: "check" }
+    ], init, async (v) => {
+      const so = Number(v.sort_order || 0), fl = Number(v.free_limit);
+      if (!RE.perm.test(v.key)) return "المفتاح: حروف إنجليزية صغيرة وأرقام و_ فقط، ويبدأ بحرف.";
+      if (!v.label) return "اسم الميزة مطلوب.";
+      if (!Number.isInteger(so)) return "الترتيب عدد صحيح.";
+      if (v.kind === "limit" && !v.unit) return "اكتب وحدة الحد للميزة العددية.";
+      if (v.free_access === "limited" && (v.kind !== "limit" || v.free_limit === "" || !Number.isInteger(fl) || fl < 0)) return "الحد المجاني للميزات العددية فقط، وبعدد صحيح موجب.";
+      const row = { label: v.label, description: v.description || null, group_name: v.group_name || null, kind: v.kind,
+        unit: v.kind === "limit" ? v.unit : null, free_access: v.free_access,
+        free_limit: v.free_access === "limited" ? fl : null, sort_order: so, is_active: v.is_active };
+      const q = f.id ? sb.from("features").update(row).eq("id", f.id) : sb.from("features").insert({ ...row, key: v.key, site_id: siteId });
       const { data, error } = await q.select("id");
       if (error) return dbErr(error);
       if (!data.length) return "لم يتم الحفظ. تحقق من صلاحياتك.";
       toast("تم الحفظ"); nav(); return null;
     });
   }
-  async function pagePlans(el) {
-    const [a, b] = await Promise.all([
-      sb.from("sites").select("id,name").order("name"),
-      sb.from("plans").select("*").order("sort_order")]);
-    if (a.error || b.error) return el.append(h("p", { class: "err" }, dbErr(a.error || b.error)));
-    const sites = a.data, plans = b.data, allPerms = [...new Set(plans.flatMap((p) => p.permissions))].sort();
-    el.append(head("الباقات"));
-    if (!sites.length) return el.append(h("div", { class: "card empty" }, tile("globe"), h("p", {}, "أضف موقعاً أولاً لتتمكن من إنشاء الباقات."), h("a", { class: "btn pri", href: "#/sites" }, "إلى المواقع")));
-    const cols = ["الباقة", "السعر", "بعد التخفيض", "المدة", "الصلاحيات", "الحالة"].concat(canEdit ? ["إجراءات"] : []);
-    for (const s of sites) {
-      const mine = plans.filter((p) => p.site_id === s.id);
-      el.append(h("div", { class: "head" }, h("h2", {}, s.name),
-        canEdit && btn("باقة جديدة", () => planForm({}, sites, allPerms, s.id), "pri", "plus")),
-        tbl(cols, mine.map((p) => [p.name, num(p.price) + " " + p.currency,
-          p.discount_type === "none" ? "-" : num(p.final_price) + " " + p.currency,
-          p.duration_value + " " + UNIT[p.duration_unit], p.permissions.join(", ") || "-", tag(p.is_active)]
-          .concat(canEdit ? [actions("plans", p, () => planForm(p, sites, allPerms, s.id))] : [])), canEdit && (() => planForm({}, sites, allPerms, s.id)), "باقة جديدة"));
-    }
+  async function importFeatures(file, site) {
+    try {
+      if (file.size > 1e6) throw 0;
+      const list = JSON.parse(await file.text()).features;
+      const rows = list.map((x, i) => {
+        if (!RE.perm.test(x.key) || typeof x.label !== "string" || !x.label.trim() || !["toggle", "limit"].includes(x.type)) throw 0;
+        return { site_id: site.id, key: x.key, label: x.label.trim().slice(0, 160), description: x.description || null,
+          group_name: x.group || null, kind: x.type, unit: x.type === "limit" ? x.unit || null : null, sort_order: i };
+      });
+      if (!rows.length || new Set(rows.map((r) => r.key)).size !== rows.length) throw 0;
+      if (!confirm("استيراد " + rows.length + " ميزة إلى «" + site.name + "»؟\nالميزات الموجودة بنفس المفتاح تتحدّث بياناتها فقط، وإعدادات الإتاحة لا تتغير.")) return;
+      const { data, error } = await sb.from("features").upsert(rows, { onConflict: "site_id,key" }).select("id");
+      if (error || !data.length) return toast(error ? dbErr(error) : "لم يتم الاستيراد. تحقق من صلاحياتك.", true);
+      toast("تم استيراد " + data.length + " ميزة"); nav();
+    } catch (e) { toast("الملف غير صالح. استخدم ملف features.json بالصيغة المتفق عليها.", true); }
+  }
+  async function pageFeatures(el) {
+    const { data: ss, error: e1 } = await sb.from("sites").select("id,name").order("name");
+    if (e1) return el.append(h("p", { class: "err" }, dbErr(e1)));
+    if (!ss.length) return el.append(head("الميزات"), h("div", { class: "card empty" }, tile("globe"), h("p", {}, "أضف موقعاً أولاً لتتمكن من إدارة ميزاته."), h("a", { class: "btn pri", href: "#/sites" }, "إلى المواقع")));
+    if (!ss.some((s) => s.id === curSite)) curSite = ss[0].id;
+    const site = ss.find((s) => s.id === curSite);
+    const sel = h("select", { "aria-label": "الموقع", onchange: (e) => { curSite = e.target.value; nav(); } },
+      ss.map((s) => h("option", { value: s.id, selected: s.id === curSite }, s.name)));
+    const file = h("input", { type: "file", accept: ".json,application/json", hidden: true, onchange: (e) => { const f = e.target.files[0]; e.target.value = ""; if (f) importFeatures(f, site); } });
+    const [f, pl, pf] = await Promise.all([
+      sb.from("features").select("*").eq("site_id", curSite).order("sort_order"),
+      sb.from("plans").select("id,name").eq("site_id", curSite).order("sort_order"),
+      sb.from("plan_features").select("plan_id,feature_id,limit_value").eq("site_id", curSite)]);
+    if (f.error || pl.error || pf.error) return el.append(h("p", { class: "err" }, dbErr(f.error || pl.error || pf.error)));
+    const inPlans = (x) => pl.data.map((p) => { const r = pf.data.find((q) => q.plan_id === p.id && q.feature_id === x.id);
+      return r && p.name + (x.kind === "limit" ? " (" + (r.limit_value === null ? "∞" : r.limit_value) + ")" : ""); }).filter(Boolean).join("، ") || "-";
+    const cols = ["الميزة", "المجموعة", "النوع", "بدون اشتراك", "الباقات", "الحالة"].concat(canEdit ? ["إجراءات"] : []);
+    el.append(head("الميزات", h("span", { class: "acts0" }, canEdit && btn("استيراد", () => file.click(), "", "plus"), canEdit && btn("ميزة جديدة", () => featureForm({}, curSite), "pri", "plus"), file)),
+      h("div", { class: "filters" }, sel),
+      tbl(cols, f.data.map((x) => [h("span", {}, x.label, h("br"), h("span", { class: "key" }, x.key)), x.group_name || "-",
+        x.kind === "limit" ? "حد عددي (" + (x.unit || "") + ")" : "تشغيل/إيقاف",
+        x.free_access === "limited" ? "حد " + x.free_limit : FREE[x.free_access], inPlans(x), tag(x.is_active)]
+        .concat(canEdit ? [actions("features", x, () => featureForm(x, curSite))] : [])),
+        canEdit && (() => file.click()), "استيراد الميزات"));
   }
 
   // ---------- Router ----------
-  const PAGES = { home: pageHome, sites: pageSites, plans: pagePlans };
+  const PAGES = { home: pageHome, sites: pageSites, features: pageFeatures, plans: pagePlans };
   async function nav() {
     if ($("dash").hidden) return;
     const m = location.hash.match(/^#\/(\w+)/), key = m && PAGES[m[1]] ? m[1] : "home";
