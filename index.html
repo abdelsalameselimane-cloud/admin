@@ -11,9 +11,9 @@
 <style>
 /* ---------- design tokens: the only place colors live ---------- */
 :root{--bg:#f4f5f8;--card:#fff;--tx:#12151c;--mu:#6a7282;--bd:#e5e8ee;--in:#f7f8fb;
---pr:#4f6bff;--pr2:#7c5cff;--ok:#16a34a;--er:#dc2626;--sh:0 6px 24px rgba(18,21,28,.06);
+--pr:#4f6bff;--pr2:#7c5cff;--ok:#16a34a;--er:#dc2626;--wr:#b45309;--sh:0 6px 24px rgba(18,21,28,.06);
 --tint:color-mix(in srgb,var(--pr) 12%,transparent);--glow:color-mix(in srgb,var(--pr) 35%,transparent)}
-@media(prefers-color-scheme:dark){:root{--bg:#0b0d12;--card:#141821;--tx:#eceef3;--mu:#98a1b3;--bd:#232a37;--in:#0f131b;--ok:#4ade80;--er:#f87171;--sh:0 6px 24px rgba(0,0,0,.35)}}
+@media(prefers-color-scheme:dark){:root{--bg:#0b0d12;--card:#141821;--tx:#eceef3;--mu:#98a1b3;--bd:#232a37;--in:#0f131b;--ok:#4ade80;--er:#f87171;--wr:#fbbf24;--sh:0 6px 24px rgba(0,0,0,.35)}}
 *{box-sizing:border-box}
 html{color-scheme:light dark}
 body{margin:0;min-height:100vh;display:grid;place-items:center;padding:16px;font-family:"Tajawal","Inter",system-ui,sans-serif;font-weight:500;line-height:1.65;color:var(--tx);
@@ -75,13 +75,14 @@ nav a[aria-current]{background:var(--tint);color:var(--pr)}
 .card b{display:block;font-size:1.15rem;font-weight:800;line-height:1.4;overflow-wrap:anywhere}
 .card span{color:var(--mu);font-size:.85rem}
 .filters{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px}
-.filters select{width:auto}
+.filters select,.filters input{width:auto;min-width:0}.filters input{flex:1;min-width:180px}
 .tw{overflow-x:auto;background:var(--card);border:1px solid var(--bd);border-radius:20px;box-shadow:var(--sh);margin-bottom:20px}
 table{width:100%;border-collapse:collapse;font-size:.9rem}
 th,td{padding:12px 14px;text-align:start;border-bottom:1px solid var(--bd);white-space:nowrap}
 tr:last-child td{border-bottom:0}
 th{color:var(--mu);font-size:.8rem;font-weight:800}
 .tag{display:inline-block;padding:2px 10px;border-radius:99px;font-size:.8rem;font-weight:800;color:var(--ok);background:color-mix(in srgb,var(--ok) 12%,transparent);border:1px solid color-mix(in srgb,var(--ok) 30%,transparent)}
+.tag.warn{color:var(--wr);background:color-mix(in srgb,var(--wr) 12%,transparent);border-color:color-mix(in srgb,var(--wr) 30%,transparent)}
 .tag.off{color:var(--mu);background:var(--in);border-color:var(--bd)}
 .acts0{display:inline-flex;gap:6px}
 dialog.modal{border:1px solid var(--bd);border-radius:20px;padding:20px;width:min(520px,94vw);max-height:90vh;background:var(--card);color:var(--tx);box-shadow:var(--sh)}
@@ -98,7 +99,7 @@ dialog.modal::backdrop{background:#0009}
  .who small,.who>span,.lbl{display:none}
  .who button{margin:0;width:38px;height:38px;padding:0;display:grid;place-items:center}
  nav{position:fixed;inset-inline:0;bottom:0;z-index:20;flex-direction:row;justify-content:space-around;gap:0;padding:6px 8px calc(6px + env(safe-area-inset-bottom));background:var(--card);border-top:1px solid var(--bd)}
- nav a{flex-direction:column;gap:2px;font-size:.75rem;padding:6px 14px}
+ nav a{flex-direction:column;gap:2px;font-size:.7rem;padding:6px 8px}
 }
 .matrix{margin-top:20px}.matrix h2{margin-bottom:6px}.matrix label{margin:0;font-weight:500}.mrow{display:flex;flex-wrap:wrap;gap:10px;align-items:center;justify-content:space-between;padding:10px 0;border-bottom:1px solid var(--bd)}.mlim{display:flex;gap:6px;align-items:center}.mlim input{width:96px;padding:8px}.mlim select{width:auto;padding:8px}.key{color:var(--mu);font-size:.8rem;direction:ltr;display:inline-block}
 [hidden]{display:none!important}
@@ -173,6 +174,7 @@ dialog.modal::backdrop{background:#0009}
     <div class="brand"><div class="logo"><svg class="ic" aria-hidden="true"><use href="#i-shield"/></svg></div>لوحة الإدارة</div>
     <nav id="nav" aria-label="التنقل">
       <a href="#/home"><svg class="ic" aria-hidden="true"><use href="#i-home"/></svg>الرئيسية</a>
+      <a href="#/subscribers"><svg class="ic" aria-hidden="true"><use href="#i-users"/></svg>المشتركون</a>
       <a href="#/sites"><svg class="ic" aria-hidden="true"><use href="#i-globe"/></svg>المواقع</a>
       <a href="#/features"><svg class="ic" aria-hidden="true"><use href="#i-sliders"/></svg>الميزات</a>
       <a href="#/plans"><svg class="ic" aria-hidden="true"><use href="#i-layers"/></svg>الباقات</a>

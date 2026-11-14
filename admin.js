@@ -330,8 +330,125 @@ window.Admin = (() => {
         canEdit && (() => file.click()), "استيراد الميزات"));
   }
 
+  // ---------- Subscribers ----------
+  const ST = { active: "نشط", expired: "منتهي", suspended: "موقوف", canceled: "ملغى" };
+  const eff = (s) => (s.status === "active" && new Date(s.ends_at) <= new Date() ? "expired" : s.status);
+  const fmt = (d) => new Date(d).toLocaleDateString("en-GB");
+  const subErr = (e) => (e.code === "23505" ? "لهذا العميل اشتراك نشط آخر بالفعل. استخدم «تمديد» عليه." : dbErr(e));
+  const stTag = (st) => h("span", { class: "tag" + (st === "active" ? "" : st === "suspended" ? " warn" : " off") }, ST[st]);
+  function addDur(from, n, unit) {
+    const d = new Date(from);
+    if (unit === "day") d.setUTCDate(d.getUTCDate() + n);
+    else {
+      const day = d.getUTCDate(); d.setUTCDate(1);
+      if (unit === "month") d.setUTCMonth(d.getUTCMonth() + n); else d.setUTCFullYear(d.getUTCFullYear() + n);
+      d.setUTCDate(Math.min(day, new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 0)).getUTCDate()));
+    }
+    return d;
+  }
+  async function audit(action, id, details) {
+    const { data: { session } } = await sb.auth.getSession();
+    const { error } = await sb.from("audit_log").insert({ admin_id: session.user.id, action, target_type: "subscription", target_id: id, details });
+    if (error) toast("تم التنفيذ لكن تعذّر تسجيله في سجل التدقيق.", true);
+  }
+  async function subUpdate(row, patch, action, label) {
+    if (!confirm(label + "؟")) return;
+    const { data, error } = await sb.from("subscriptions").update(patch).eq("id", row.id).select("id");
+    if (error || !data.length) return toast(error ? subErr(error) : "لم يتم التنفيذ. تحقق من صلاحياتك.", true);
+    await audit(action, row.id, { from: { status: row.status, ends_at: row.ends_at }, to: patch });
+    toast("تم التنفيذ"); nav();
+  }
+  function extendForm(row, who) {
+    modal("تمديد اشتراك " + who, [
+      { k: "n", l: "المدة المضافة", t: "number" },
+      { k: "unit", l: "الوحدة", t: "select", opts: Object.entries(UNIT) }
+    ], { n: 1, unit: "month" }, async (v) => {
+      const n = Number(v.n);
+      if (!Number.isInteger(n) || n < 1) return "المدة عدد صحيح أكبر من صفر.";
+      const base = new Date(Math.max(new Date(row.ends_at), new Date()));
+      const patch = { status: "active", ends_at: addDur(base, n, v.unit).toISOString() };
+      const { data, error } = await sb.from("subscriptions").update(patch).eq("id", row.id).select("id");
+      if (error) return subErr(error);
+      if (!data.length) return "لم يتم التنفيذ. تحقق من صلاحياتك.";
+      await audit("subscription.extend", row.id, { from: { status: row.status, ends_at: row.ends_at }, to: patch, added: n + " " + v.unit });
+      toast("تم التمديد"); nav(); return null;
+    });
+  }
+  function manualForm(plans, sites) {
+    const sn = Object.fromEntries(sites.map((s) => [s.id, s.name]));
+    modal("اشتراك يدوي", [
+      { k: "plan", l: "الباقة", t: "select", opts: plans.filter((p) => p.is_active).map((p) => [p.id, sn[p.site_id] + " / " + p.name]) },
+      { k: "name", l: "اسم العميل", max: 160 },
+      { k: "email", l: "البريد الإلكتروني", dir: "ltr" },
+      { k: "phone", l: "الهاتف (اختياري)", dir: "ltr" },
+      { k: "n", l: "المدة", t: "number", hint: "اتركها فارغة لاستعمال مدة الباقة نفسها" },
+      { k: "unit", l: "وحدة المدة", t: "select", opts: Object.entries(UNIT) },
+      { k: "note", l: "ملاحظة (مثل: دفع CCP رقم الوصل…)", t: "area", rows: 2 }
+    ], { unit: "month" }, async (v) => {
+      const plan = plans.find((p) => p.id === v.plan), email = v.email.toLowerCase();
+      if (!plan) return "اختر الباقة.";
+      if (!v.name) return "اسم العميل مطلوب.";
+      if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return "البريد الإلكتروني غير صالح.";
+      const custom = v.n !== "", n = custom ? Number(v.n) : plan.duration_value, unit = custom ? v.unit : plan.duration_unit;
+      if (!Number.isInteger(n) || n < 1) return "المدة عدد صحيح أكبر من صفر.";
+      const ex = await sb.from("customers").select("id").eq("site_id", plan.site_id).eq("email", email).maybeSingle();
+      if (ex.error) return dbErr(ex.error);
+      let cid = ex.data && ex.data.id;
+      if (!cid) {
+        const c = await sb.from("customers").insert({ site_id: plan.site_id, full_name: v.name, email, phone: v.phone || null }).select("id");
+        if (c.error) return dbErr(c.error);
+        cid = c.data[0].id;
+      }
+      const start = new Date(), row = { site_id: plan.site_id, customer_id: cid, plan_id: plan.id, status: "active",
+        starts_at: start.toISOString(), ends_at: addDur(start, n, unit).toISOString(), source: "manual", note: v.note || null };
+      const { data, error } = await sb.from("subscriptions").insert(row).select("id");
+      if (error) return subErr(error);
+      await audit("subscription.create", data[0].id, { plan: plan.name, email, ends_at: row.ends_at });
+      toast("تم إنشاء الاشتراك"); nav(); return null;
+    });
+  }
+  async function pageSubscribers(el) {
+    const [s, c, p, ss] = await Promise.all([
+      sb.from("subscriptions").select("*").order("ends_at", { ascending: false }).limit(500),
+      sb.from("customers").select("id,full_name,email").limit(1000),
+      sb.from("plans").select("id,name,site_id,is_active,duration_value,duration_unit"),
+      sb.from("sites").select("id,name").order("name")]);
+    const err = s.error || c.error || p.error || ss.error;
+    if (err) return el.append(h("p", { class: "err" }, dbErr(err)));
+    const cm = Object.fromEntries(c.data.map((x) => [x.id, x])), pm = Object.fromEntries(p.data.map((x) => [x.id, x])), sm = Object.fromEntries(ss.data.map((x) => [x.id, x.name]));
+    const site = h("select", { "aria-label": "الموقع" }, h("option", { value: "" }, "كل المواقع"), ss.data.map((x) => h("option", { value: x.id }, x.name)));
+    const stat = h("select", { "aria-label": "الحالة" }, h("option", { value: "" }, "كل الحالات"), Object.entries(ST).map(([k, l]) => h("option", { value: k }, l)));
+    const q = h("input", { type: "search", placeholder: "بحث بالاسم أو البريد", "aria-label": "بحث" });
+    const out = h("div");
+    function render() {
+      const term = q.value.trim().toLowerCase();
+      const rows = s.data.filter((x) => {
+        const cu = cm[x.customer_id] || {};
+        return (!site.value || x.site_id === site.value) && (!stat.value || eff(x) === stat.value) &&
+          (!term || (cu.full_name || "").toLowerCase().includes(term) || (cu.email || "").includes(term));
+      }).map((x) => {
+        const cu = cm[x.customer_id] || {}, st = eff(x), who = cu.full_name || "";
+        const r = [h("span", {}, who, h("br"), h("span", { class: "key" }, cu.email || "")), sm[x.site_id] || "-", (pm[x.plan_id] || {}).name || "-",
+          fmt(x.starts_at), fmt(x.ends_at), stTag(st), x.source === "manual" ? "يدوي" : "دفع"];
+        if (canEdit) r.push(h("span", { class: "acts0" },
+          btn("تمديد", () => extendForm(x, who), "sm", "plus"),
+          st === "active" && btn("إيقاف", () => subUpdate(x, { status: "suspended" }, "subscription.suspend", "إيقاف اشتراك " + who), "sm", "power"),
+          st === "suspended" && new Date(x.ends_at) > new Date() && btn("تفعيل", () => subUpdate(x, { status: "active" }, "subscription.activate", "تفعيل اشتراك " + who), "sm", "power"),
+          (st === "active" || st === "suspended") && btn("إلغاء", () => subUpdate(x, { status: "canceled" }, "subscription.cancel", "إلغاء اشتراك " + who + " نهائياً"), "sm")));
+        return r;
+      });
+      const cols = ["العميل", "الموقع", "الباقة", "البداية", "الانتهاء", "الحالة", "المصدر"].concat(canEdit ? ["إجراءات"] : []);
+      out.replaceChildren(tbl(cols, rows, canEdit && (() => manualForm(p.data, ss.data)), "اشتراك يدوي"),
+        s.data.length >= 500 ? h("p", { class: "muted" }, "يعرض آخر 500 اشتراك فقط.") : "");
+    }
+    [site, stat].forEach((x) => x.addEventListener("change", render)); q.addEventListener("input", render);
+    el.append(head("المشتركون", canEdit && btn("اشتراك يدوي", () => manualForm(p.data, ss.data), "pri", "plus")),
+      h("div", { class: "filters" }, site, stat, q), out);
+    render();
+  }
+
   // ---------- Router ----------
-  const PAGES = { home: pageHome, sites: pageSites, features: pageFeatures, plans: pagePlans };
+  const PAGES = { home: pageHome, subscribers: pageSubscribers, sites: pageSites, features: pageFeatures, plans: pagePlans };
   async function nav() {
     if ($("dash").hidden) return;
     const m = location.hash.match(/^#\/(\w+)/), key = m && PAGES[m[1]] ? m[1] : "home";
